@@ -118,8 +118,26 @@ YAML
   ok "Compose file written."
 }
 
+# Pull images with retries so registry rate limits (e.g. ghcr.io
+# "toomanyrequests") do not abort the install. Runs in the current dir.
+pull_with_retry() {
+  local -a dc=(docker compose)
+  docker info >/dev/null 2>&1 || dc=(sudo docker compose)
+  export COMPOSE_PARALLEL_LIMIT=1
+  local delays=(10 20 40 60 60) attempt=0
+  until "${dc[@]}" pull; do
+    if (( attempt >= ${#delays[@]} )); then
+      die "docker compose pull failed after $((attempt + 1)) attempts (registry rate limit or network). Wait a few minutes and rerun this script."
+    fi
+    warn "docker compose pull failed (attempt $((attempt + 1))/$((${#delays[@]} + 1))). Retrying in ${delays[$attempt]}s..."
+    sleep "${delays[$attempt]}"
+    attempt=$((attempt + 1))
+  done
+}
+
 start_stack() {
   info "Starting Nginx Proxy Manager..."
+  (cd "$INSTALL_DIR" && pull_with_retry) || die "docker compose pull failed"
   (cd "$INSTALL_DIR" && sudo docker compose up -d) || die "docker compose up failed"
   sleep 3
   if sudo docker compose -f "$INSTALL_DIR/docker-compose.yml" ps | grep -q "Up"; then
